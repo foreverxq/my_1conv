@@ -212,19 +212,9 @@ def detection_collate(batch):
 
 if __name__ == '__main__':
     testset = VOCDetection(VOC_ROOT, [('2007', 'val')], None, VOCAnnotationTransform())
-
-
-
-    img_id = 20
-    image = testset.item(img_id)
-    print(image.shape)
-    anno = testset.pull_anno(img_id)
-
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    # View the sampled input image before transform
-    plt.figure(figsize=(10, 10))
-    plt.imshow(rgb_image)
-    plt.show()
+    data = next(iter(testset))
+    print('hihihi')
+    print('hfdkfk')
 
 
 

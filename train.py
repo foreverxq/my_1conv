@@ -68,6 +68,17 @@ else:
 if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
 
+cfg = {
+    'train_root' : 'D:\signal_data\G35_recorder_npydata',
+    'cuda' : True
+}
+if torch.cuda.is_available():
+    if cfg['cuda'] == True:
+        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    if not cfg['cuda']:
+        print("WARNING: It looks like you have a CUDA device, but aren't " +
+              "using CUDA.\nRun with --cuda for optimal training speed.")
+        torch.set_default_tensor_type('torch.FloatTensor')
 
 
 
@@ -75,24 +86,15 @@ if not os.path.exists(args.save_folder):
 
 
 def train():
-    if args.dataset == 'COCO':
-        if args.dataset_root == VOC_ROOT:
-            if not os.path.exists(COCO_ROOT):
-                parser.error('Must specify dataset_root if specifying dataset')
-            print("WARNING: Using default COCO dataset_root because " +
-                  "--dataset_root was not specified.")
-            args.dataset_root = COCO_ROOT
-        cfg = coco
-        dataset = COCODetection(root=args.dataset_root,
-                                transform=SSDAugmentation(cfg['min_dim'],
-                                                          MEANS))
-    elif args.dataset == 'VOC':
+    args.dataset == 'VOC':
         if args.dataset_root == COCO_ROOT:
             parser.error('Must specify dataset if specifying dataset_root')
         cfg = voc
         dataset = VOCDetection(root=args.dataset_root,
                                transform=SSDAugmentation(cfg['min_dim'],
                                                          MEANS))
+
+    dataset = SignalData(root = cfg['train_root'],)
 
 
 
