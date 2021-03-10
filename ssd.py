@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from layers import *
-from data import voc, coco
+from data import data_cfg
 import os
 
 
@@ -11,8 +11,8 @@ class SSD(nn.Module):
     """Single Shot Multibox Architecture
     The network is composed of a base VGG network followed by the
     added multibox conv layers.  Each multibox layer branches into
-        1) conv2d for class conf scores
-        2) conv2d for localization predictions
+        1) conv1d for class conf scores
+        2) conv1d for localization predictions
         3) associated priorbox layer to produce default bounding
            boxes specific to the layer's feature map size.
     See: https://arxiv.org/pdf/1512.02325.pdf for more details.
@@ -29,7 +29,7 @@ class SSD(nn.Module):
         super(SSD, self).__init__()
         self.phase = phase
         self.num_classes = num_classes
-        self.cfg = (coco, voc)[num_classes == 21]
+        self.cfg = data_cfg
         self.priorbox = PriorBox(self.cfg)
         self.priors = Variable(self.priorbox.forward(), volatile=True)
         self.size = size
@@ -128,29 +128,33 @@ def vgg(cfg, i, batch_norm=False):
     in_channels = i
     for v in cfg:
         if v == 'M':
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            layers += [nn.MaxPool1d(kernel_size=2, stride=2)]
         elif v == 'C':
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True)]
+            layers += [nn.MaxPool1d(kernel_size=2, stride=2, ceil_mode=True)]
         else:
-            conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+            conv1d = nn.Conv1d(in_channels, v, kernel_size=3, padding=1)
             if batch_norm:
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+                layers += [conv1d, nn.BatchNorm1d(v), nn.ReLU(inplace=True)]
             else:
-                layers += [conv2d, nn.ReLU(inplace=True)]
+                layers += [conv1d, nn.ReLU(inplace=True)]
             in_channels = v
-    pool5 = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
-    conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=6, dilation=6)
-    conv7 = nn.Conv2d(1024, 1024, kernel_size=1)
+    pool5 = nn.MaxPool1d(kernel_size=3, stride=1, padding=1)
+    conv6 = nn.Conv1d(512, 1024, kernel_size=3, padding=6, dilation=6)
+    conv7 = nn.Conv1d(1024, 1024, kernel_size=1)
     layers += [pool5, conv6,
                nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
     return layers
 
-# extras = {
-#     '300': [256, 'S', 512, 128, 'S', 256, 128, 256, 128, 256],
-# }
-#1024
-#torch的layer可以放在一个list之中
-def add_extras(cfg, i, batch_norm=False):
+def feature_layer(cfg):
+    layers = []
+    for i in range(len(cfg)):
+        layers.append([])
+        for j in range(len(cfg[i]) - 1):
+            layers[i].append(nn.Conv1d(cfg[i][j], cfg[i][j+1], kernel_size=3, stride = (2, 1)[i % 2== 1], padding =1))
+    return layers
+
+
+def add_extras(cfg, i, batch_norm = False):
     # Extra layers added to VGG for feature scaling
     layers = []
     in_channels = i
@@ -158,13 +162,15 @@ def add_extras(cfg, i, batch_norm=False):
     for k, v in enumerate(cfg):
         if in_channels != 'S':
             if v == 'S':
-                layers += [nn.Conv2d(in_channels, cfg[k + 1],
+                layers += [nn.Conv1d(in_channels, cfg[k + 1],
                            kernel_size=(1, 3)[flag], stride=2, padding=1)]
             else:
-                layers += [nn.Conv2d(in_channels, v, kernel_size=(1, 3)[flag])]
+                layers += [nn.Conv1d(in_channels, v, kernel_size=(1, 3)[flag])]
             flag = not flag
         in_channels = v
     return layers
+
+
 
 
 #'300': [4, 6, 6, 6, 4, 4],
@@ -190,27 +196,21 @@ def multibox(vgg, extra_layers, cfg, num_classes):
     loc_layers = []
     conf_layers = []
     vgg_source = [21, -2]
-    #在
+
     for k, v in enumerate(vgg_source):
-        loc_layers += [nn.Conv2d(vgg[v].out_channels,
+        loc_layers += [nn.Conv1d(vgg[v].out_channels,
                                  cfg[k] * 4, kernel_size=3, padding=1)]
-        conf_layers += [nn.Conv2d(vgg[v].out_channels,
+        conf_layers += [nn.Conv1d(vgg[v].out_channels,
                         cfg[k] * num_classes, kernel_size=3, padding=1)]
 
-
     for k, v in enumerate(extra_layers[1::2], 2):
-        loc_layers += [nn.Conv2d(v.out_channels, cfg[k]
+        loc_layers += [nn.Conv1d(v.out_channels, cfg[k]
                                  * 4, kernel_size=3, padding=1)]
-        conf_layers += [nn.Conv2d(v.out_channels, cfg[k]
+        conf_layers += [nn.Conv1d(v.out_channels, cfg[k]
                                   * num_classes, kernel_size=3, padding=1)]
     return vgg, extra_layers, (loc_layers, conf_layers)
 
 
-base = {
-    '300': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'C', 512, 512, 512, 'M',
-            512, 512, 512],
-    '512': [],
-}
 extras = {
     '300': [256, 'S', 512, 128, 'S', 256, 128, 256, 128, 256],
 }
@@ -234,13 +234,39 @@ def build_ssd(phase, size=300, num_classes=21):
     return SSD(phase, size, base_, extras_, head_, num_classes)
 
 if __name__ == '__main__':
-    ssd = build_ssd('train')
-    _vgg = vgg(base['300'], 3)
-    print(_vgg)
-    _vgg = nn.ModuleList(_vgg)
-    print(len(_vgg))
-    print(_vgg)
-    print(_vgg)
+    cfg = [[10,32,64,128],[80,128, 256, 128], [256,128]]
+    extra = [128,256,256,256,512,512]
+    from data import Signal_Data
+    dataset = Signal_Data(root = 'D:\signal_data\G35_recorder_npydata')
+    data, label = next(iter(dataset))
+
+    class test_net(nn.Module):
+
+        def __init__(self,base, cfg):
+            super(test_net, self).__init__()
+            self.feature_layer = []
+            for i in range(len(cfg)):
+                self.feature_layer.append(nn.ModuleList(base[i]))
+            self.cfg = cfg
+        def forward(self, x):
+            for i in range(len(self.cfg) - 1):
+                for j in range(len(self.feature_layer[i])):
+                    x[i] = x[i].to(torch.float32)
+                    x[i] = self.feature_layer[i][j](x[i])
+            result = torch.cat([x[0], x[1]], 1)
+            for j in range(len(self.feature_layer[-1])):
+                result = self.feature_layer[-1][j](result)
+            return result
+
+    for i in range(len(data)):
+        data[i] = data[i].unsqueeze(0)
+    data = data[0:2]
+    base = feature_layer(cfg)
+    net = test_net(base, cfg)
+    result = net(data)
+    print(result)
+
+
 
 
 

@@ -7,6 +7,8 @@ import torch
 class PriorBox(object):
     """Compute priorbox coordinates in center-offset form for each source
     feature map.
+
+    为每个特征向量制作一个priorpos
     """
     def __init__(self, cfg):
         super(PriorBox, self).__init__()
@@ -56,3 +58,9 @@ class PriorBox(object):
         if self.clip:
             output.clamp_(max=1, min=0)
         return output
+
+
+if __name__ == '__main__':
+    from data.config import data_cfg
+    prior_box = PriorBox(cfg = data_cfg)
+

@@ -4,8 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from data import coco as cfg
-from ..box_utils import match, log_sum_exp
-
+# from ..box_utils import match, log_sum_exp
+from layers.box_utils import match, log_sum_exp
 
 class MultiBoxLoss(nn.Module):
     """SSD损失函数
@@ -120,3 +120,10 @@ class MultiBoxLoss(nn.Module):
         loss_c /= N
         return loss_l, loss_c
 #TODO 其中hard negative mining 写的很巧妙，再继续看下。
+
+if __name__ == '__main__':
+    from train import train_cfg
+    from data.config import data_cfg
+    criterion = MultiBoxLoss(data_cfg['num_classes'], 0.5, True, 0, True, 3, 0.5,
+                             False, train_cfg['cuda'])
+
