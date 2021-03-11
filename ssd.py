@@ -121,30 +121,6 @@ class SSD(nn.Module):
             print('Sorry only .pth and .pkl files supported.')
 
 
-# This function is derived from torchvision VGG make_layers()
-# https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
-def vgg(cfg, i, batch_norm=False):
-    layers = []
-    in_channels = i
-    for v in cfg:
-        if v == 'M':
-            layers += [nn.MaxPool1d(kernel_size=2, stride=2)]
-        elif v == 'C':
-            layers += [nn.MaxPool1d(kernel_size=2, stride=2, ceil_mode=True)]
-        else:
-            conv1d = nn.Conv1d(in_channels, v, kernel_size=3, padding=1)
-            if batch_norm:
-                layers += [conv1d, nn.BatchNorm1d(v), nn.ReLU(inplace=True)]
-            else:
-                layers += [conv1d, nn.ReLU(inplace=True)]
-            in_channels = v
-    pool5 = nn.MaxPool1d(kernel_size=3, stride=1, padding=1)
-    conv6 = nn.Conv1d(512, 1024, kernel_size=3, padding=6, dilation=6)
-    conv7 = nn.Conv1d(1024, 1024, kernel_size=1)
-    layers += [pool5, conv6,
-               nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
-    return layers
-
 def feature_layer(cfg):
     layers = []
     for i in range(len(cfg)):
@@ -153,71 +129,30 @@ def feature_layer(cfg):
             layers[i].append(nn.Conv1d(cfg[i][j], cfg[i][j+1], kernel_size=3, stride = (2, 1)[i % 2== 1], padding =1))
     return layers
 
-
-def add_extras(cfg, i, batch_norm = False):
-    # Extra layers added to VGG for feature scaling
+def extra_layer(cfg):
     layers = []
-    in_channels = i
-    flag = False
-    for k, v in enumerate(cfg):
-        if in_channels != 'S':
-            if v == 'S':
-                layers += [nn.Conv1d(in_channels, cfg[k + 1],
-                           kernel_size=(1, 3)[flag], stride=2, padding=1)]
-            else:
-                layers += [nn.Conv1d(in_channels, v, kernel_size=(1, 3)[flag])]
-            flag = not flag
-        in_channels = v
+    for i in range(len(cfg) - 1):
+        layers.append(nn.Conv1d(cfg[i], cfg[i+1], kernel_size = 3, stride = 2, padding = 1))
     return layers
 
-
-
-
-#'300': [4, 6, 6, 6, 4, 4],
-#vgg ==
-# base = {
-#     '300': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'C', 512, 512, 512, 'M',
-#             512, 512, 512],
-#     '512': [],
-# }
-
-#cfg  == mbox
-#mbox = {
-#     '300': [4, 6, 6, 6, 4, 4],  # number of boxes per feature map location
-#     '512': [],
-# }
-#其中cfg 代表的是锚框数的参数
-#特征提取层的feature_map中的每个cell对应cfg[k]个锚框
-#loc_layer(位移预测层)对feature_map的每个cell对应的cfg[k]个锚框分别预测出四个位移量
-# feature_map的channel数为vgg[v].out_channels
-# 于是loc_layer输入的channel数为vgg[v].out_channels，输出channel数为cfg[k]*4
-#conf_layer(类别预测层)对应的class
-def multibox(vgg, extra_layers, cfg, num_classes):
+def multibox(base_cfg, extra_cfg, num_box, num_classes):
     loc_layers = []
     conf_layers = []
-    vgg_source = [21, -2]
+    for i, channel in enumerate(base_cfg[-1][-2::]):
+        loc_layers += [nn.Conv1d(channel,
+                                 num_box[i] * 4, kernel_size=3, padding=1)]
+        conf_layers += [nn.Conv1d(channel,
+                                  num_box[i] * num_classes, kernel_size=3, padding=1)]
+    for i, channel in enumerate(extra_cfg, 2):
+        loc_layers += [nn.Conv1d(channel,
+                                 num_box[i] * 4, kernel_size=3, padding=1)]
+        conf_layers += [nn.Conv1d(channel,
+                                  num_box[i] * num_classes, kernel_size=3, padding=1)]
 
-    for k, v in enumerate(vgg_source):
-        loc_layers += [nn.Conv1d(vgg[v].out_channels,
-                                 cfg[k] * 4, kernel_size=3, padding=1)]
-        conf_layers += [nn.Conv1d(vgg[v].out_channels,
-                        cfg[k] * num_classes, kernel_size=3, padding=1)]
-
-    for k, v in enumerate(extra_layers[1::2], 2):
-        loc_layers += [nn.Conv1d(v.out_channels, cfg[k]
-                                 * 4, kernel_size=3, padding=1)]
-        conf_layers += [nn.Conv1d(v.out_channels, cfg[k]
-                                  * num_classes, kernel_size=3, padding=1)]
-    return vgg, extra_layers, (loc_layers, conf_layers)
+    return loc_layers, conf_layers
 
 
-extras = {
-    '300': [256, 'S', 512, 128, 'S', 256, 128, 256, 128, 256],
-}
-mbox = {
-    '300': [4, 6, 6, 6, 4, 4],  # number of boxes per feature map location
-    '512': [],
-}
+
 
 
 def build_ssd(phase, size=300, num_classes=21):
@@ -233,20 +168,34 @@ def build_ssd(phase, size=300, num_classes=21):
                                      mbox[str(size)], num_classes)
     return SSD(phase, size, base_, extras_, head_, num_classes)
 
+
+
+
+
 if __name__ == '__main__':
-    cfg = [[10,32,64,128],[80,128, 256, 128], [256,128]]
-    extra = [128,256,256,256,512,512]
+    # 特征提取网络结构配置
+    base_cfg = [[10, 32, 64, 128], [80, 128, 256, 128], [256, 128]]
+    # extra网络结构配置
+    extra_cfg = [128, 256, 256, 256, 512, 512]
+    #各个网络对应的锚框数
+    num_box = [4, 4, 4, 4, 6, 6, 4, 4]
+
+
     from data import Signal_Data
     dataset = Signal_Data(root = 'D:\signal_data\G35_recorder_npydata')
-    data, label = next(iter(dataset))
+    iter_data = iter(dataset)
+    data, label = next(iter_data)
+
+    print(label[label.files[0]])
 
     class test_net(nn.Module):
 
-        def __init__(self,base, cfg):
+        def __init__(self,base,extra_layer,cfg):
             super(test_net, self).__init__()
             self.feature_layer = []
             for i in range(len(cfg)):
                 self.feature_layer.append(nn.ModuleList(base[i]))
+            self.extra_layer = extra_layer
             self.cfg = cfg
         def forward(self, x):
             for i in range(len(self.cfg) - 1):
@@ -256,14 +205,21 @@ if __name__ == '__main__':
             result = torch.cat([x[0], x[1]], 1)
             for j in range(len(self.feature_layer[-1])):
                 result = self.feature_layer[-1][j](result)
+            for layer in self.extra_layer:
+                result = layer(result)
             return result
 
     for i in range(len(data)):
         data[i] = data[i].unsqueeze(0)
     data = data[0:2]
-    base = feature_layer(cfg)
-    net = test_net(base, cfg)
+    base = feature_layer(base_cfg)
+    extra_layer = extra_layer(extra_cfg)
+    box = multibox(base_cfg, extra_cfg, num_box, 21)
+
+
+    net = test_net(base,extra_layer, base_cfg)
     result = net(data)
+
     print(result)
 
 
