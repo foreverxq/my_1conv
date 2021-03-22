@@ -18,7 +18,7 @@ data_num = 1
 print(file_path)
 
 
-
+ 
 for idx in range(4, 11):
     data = np.load(os.path.join(root_path,file_path[idx]))
     label = np.load(os.path.join(root_path, file_path[idx + 7]), allow_pickle= True )

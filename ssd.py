@@ -122,6 +122,14 @@ class SSD(nn.Module):
 
 
 def feature_layer(cfg):
+    """
+
+    Args:
+        cfg:输入的配置文件
+
+    Returns:
+        特征提取网络
+    """
     layers = []
     for i in range(len(cfg)):
         layers.append([])
@@ -130,22 +138,42 @@ def feature_layer(cfg):
     return layers
 
 def extra_layer(cfg):
+    """
+
+    Args:
+        cfg: 输入的配置文件
+
+    Returns:
+            输出的目标位置和类别所基于的网络
+    """
+
     layers = []
     for i in range(len(cfg) - 1):
         layers.append(nn.Conv1d(cfg[i], cfg[i+1], kernel_size = 3, stride = 2, padding = 1))
     return layers
 
 def multibox(base_cfg, extra_cfg, num_box, num_classes):
+    """
+
+    Args:
+        base_cfg:特征提取网络配置参数
+        extra_cfg:extra_layer 网络配置参数
+        num_box:各个层所对应的锚框数
+        num_classes:各个层所对应的类别数
+
+    Returns:
+        位置网络与类别网络
+    """
     loc_layers = []
     conf_layers = []
-    for i, channel in enumerate(base_cfg[-1][-2::]):
+    for i, channel in enumerate(base_cfg[-1][-1::]):
         loc_layers += [nn.Conv1d(channel,
-                                 num_box[i] * 4, kernel_size=3, padding=1)]
+                                 num_box[i] * 2, kernel_size=3, padding=1)]
         conf_layers += [nn.Conv1d(channel,
                                   num_box[i] * num_classes, kernel_size=3, padding=1)]
-    for i, channel in enumerate(extra_cfg, 2):
+    for i, channel in enumerate(extra_cfg[1::], 1):
         loc_layers += [nn.Conv1d(channel,
-                                 num_box[i] * 4, kernel_size=3, padding=1)]
+                                 num_box[i] * 2, kernel_size=3, padding=1)]
         conf_layers += [nn.Conv1d(channel,
                                   num_box[i] * num_classes, kernel_size=3, padding=1)]
 
@@ -153,32 +181,76 @@ def multibox(base_cfg, extra_cfg, num_box, num_classes):
 
 
 
+class test_net(nn.Module):
+    """
+
+    """
+
+    def __init__(self,base,extra_layer,cfg, box_layer):
+        """
+
+        Args:
+            base:特征提取网络
+            extra_layer:输出的目标位置和类别所基于的网络
+            cfg:特征提取网络的配置文件
+            box_layer:位置网络和类别网络
+        """
+        super(test_net, self).__init__()
+        self.feature_layer = []
+        for i in range(len(cfg)):
+            self.feature_layer.append(nn.ModuleList(base[i]))
+        self.extra_layer = extra_layer
+        self.loc_layer = nn.ModuleList(box_layer[0])
+        self.conf_layer = nn.ModuleList(box_layer[1])
+
+        self.cfg = cfg
+        self.len_feature_layer = len(cfg)
+
+    def forward(self, x):
+        """
+
+        Args:
+            x:输入的信号
+
+        Returns:
+
+        """
+        sources = list()
+        loc = list()
+        conf = list()
+        for i in range(self.len_feature_layer - 1):
+            for j in range(len(self.feature_layer[i])):
+                x[i] = x[i].to(torch.float32)
+                x[i] = self.feature_layer[i][j](x[i])
+        result = torch.cat([x[0], x[1]], 1)
+
+        for j in range(len(self.feature_layer[-1])):
+            result = self.feature_layer[-1][j](result)
+            sources.append(result)
+
+        for layer in self.extra_layer:
+            result = layer(result)
+            sources.append(result)
+
+        for (x, l, c) in zip(sources, self.loc_layer, self.conf_layer):
+            _temp = l(x)
+            _temp2 = c(x)
 
 
-def build_ssd(phase, size=300, num_classes=21):
-    if phase != "test" and phase != "train":
-        print("ERROR: Phase: " + phase + " not recognized")
-        return
-    if size != 300:
-        print("ERROR: You specified size " + repr(size) + ". However, " +
-              "currently only SSD300 (size=300) is supported!")
-        return
-    base_, extras_, head_ = multibox(vgg(base[str(size)], 3),
-                                     add_extras(extras[str(size)], 1024),
-                                     mbox[str(size)], num_classes)
-    return SSD(phase, size, base_, extras_, head_, num_classes)
+            loc.append(l(x).permute(0, 2, 1).contiguous())
+            conf.append(c(x).permute(0, 2,1).contiguous())
 
+        loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
+        conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
 
-
-
-
+        return result
 if __name__ == '__main__':
     # 特征提取网络结构配置
     base_cfg = [[10, 32, 64, 128], [80, 128, 256, 128], [256, 128]]
     # extra网络结构配置
     extra_cfg = [128, 256, 256, 256, 512, 512]
     #各个网络对应的锚框数
-    num_box = [4, 4, 4, 4, 6, 6, 4, 4]
+    num_box = [4, 4, 4, 6, 6, 4]
 
 
     from data import Signal_Data
@@ -188,36 +260,17 @@ if __name__ == '__main__':
 
     print(label[label.files[0]])
 
-    class test_net(nn.Module):
 
-        def __init__(self,base,extra_layer,cfg):
-            super(test_net, self).__init__()
-            self.feature_layer = []
-            for i in range(len(cfg)):
-                self.feature_layer.append(nn.ModuleList(base[i]))
-            self.extra_layer = extra_layer
-            self.cfg = cfg
-        def forward(self, x):
-            for i in range(len(self.cfg) - 1):
-                for j in range(len(self.feature_layer[i])):
-                    x[i] = x[i].to(torch.float32)
-                    x[i] = self.feature_layer[i][j](x[i])
-            result = torch.cat([x[0], x[1]], 1)
-            for j in range(len(self.feature_layer[-1])):
-                result = self.feature_layer[-1][j](result)
-            for layer in self.extra_layer:
-                result = layer(result)
-            return result
 
     for i in range(len(data)):
         data[i] = data[i].unsqueeze(0)
     data = data[0:2]
     base = feature_layer(base_cfg)
     extra_layer = extra_layer(extra_cfg)
-    box = multibox(base_cfg, extra_cfg, num_box, 21)
+    box_layer = multibox(base_cfg, extra_cfg, num_box, 21)
 
 
-    net = test_net(base,extra_layer, base_cfg)
+    net = test_net(base,extra_layer, base_cfg, box_layer)
     result = net(data)
 
     print(result)
